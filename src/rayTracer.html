@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <title>WebGL Ray Tracer</title>
+
+
+<script id="vshader" type="x-shader/x-vertex">
+    precision highp int;
+   attribute vec3 aPosition;
+   varying   vec3 vPosition;
+   uniform int sceneNum;
+   void main() {
+      gl_Position = vec4(aPosition, 1.0);
+      vPosition = aPosition;
+   }
+</script>
+
+<script id="fshader" type="x-shader/x-fragment">
+    precision highp float;
+    precision highp int;
+    varying vec3 vPosition;
+    uniform int sceneNum;
+
+    struct Sphere {
+        vec3 center;
+        float radius;
+        vec3 color;
+        bool hasSpecular; // controls drawing of specular or not
+        bool hasReflection; // controls if the ray should go produce a reflection back in main
+        bool isMirror; // controls if the color of this ray is included in the final computation.
+    };
+
+    struct Plane { // planes don't need specular in the asignments so
+        vec3 center;
+        vec3 normal;
+        vec3 color;
+        bool hasReflection; // controls if the ray should go produce a reflection back in main
+        bool isMirror; // controls if the color of this ray is included in the final computation.
+    };
+
+    struct Ray {
+        vec3 origin;
+        vec3 direction;
+    };
+
+    struct Light {
+        vec3 position;
+        float ambience;
+        vec3 specular;
+        vec3 diffuse;
+    };
+
+    struct RayTracerOutput {
+        Ray reflectedRay;
+        vec3 color;
+        bool include; // for mirrors, setting false means the color is ignored and is just the color of reflections.
+        bool futures; // for non-reflective objects, setting true means no further reflection rays will be produced.
+    };
+
+    int num_spheres = 4; // needs to be set properly for breaking out of loops.
+    int num_planes = 6; // same as above, but it controls planes.
+    Sphere spheres[4]; // must be sufficiently sized to store all the spheres ever
+    Plane planes[7];  // same as above, but for planes
+    Ray rays[1];     // the ray to trace
+    Light light[1]; // where the light is
+
+    // 2 spheres on blue plane, red one in front of green one, red one reflects and has specular, casts shadow on green
+    // one, green one doesn't reflect or have specular, plane reflects, both spheres cast shadows.
+    void initialize1() {
+        float x = vPosition.x;
+        float y = vPosition.y;
+        float z = vPosition.z;
+        float focalLength = 2.0;
+        vec3 color = vec3(0.0, 0.0, 0.0);
+
+        num_spheres = 2;
+        num_planes = 1;
+
+        // Create spheres
+        spheres[0].center = vec3(-0.35, -0.1, -0.4);
+        spheres[0].radius = 0.3;
+        spheres[0].color = vec3(1.0, 0.0, 0.0);
+        spheres[0].hasSpecular = true;
+        spheres[0].hasReflection = true;
+        spheres[0].isMirror = false;
+
+        // Create spheres
+        spheres[1].center = vec3(0.25, -0.1, -0.75);
+        spheres[1].radius = 0.3;
+        spheres[1].color = vec3(0.0, 1.0, 0.0);
+        spheres[1].hasSpecular = false;
+        spheres[1].hasReflection = false;
+        spheres[1].isMirror = false;
+
+        // Create spheres
+        spheres[2].center = vec3(-0.1, 0.1, -0.5);
+        spheres[2].radius = 0.3;
+        spheres[2].color = vec3(0.0, 0.0, 1.0);
+        spheres[2].color = vec3(1.0, 0.0, 0.0);
+        spheres[2].hasSpecular = true;
+        spheres[2].hasReflection = false;
+        spheres[2].isMirror = false;
+
+        // Create ray
+        rays[0].origin = vec3(0.0, 0.0, focalLength);
+        rays[0].direction = normalize(vec3(x, y, -focalLength));
+
+        // Create Light source
+        light[0].position = vec3(-1.0, 1.0, 1.5);
+        light[0].ambience = 0.1;
+
+        // floor
+        planes[0].center = vec3(0.0, -0.4, 0.0);
+        planes[0].normal = vec3(0.0, 1.0, 0.0);
+        planes[0].color = vec3(0.0, 0.0, 1.0);
+        planes[0].hasReflection = true;
+        planes[0].isMirror = false;
+    }
+
+    // 4 spheres and no planes. All the spheres reflect eachother twice. All have spectral. Light in the middle above
+    // them.
+    void initialize2() {
+        float x = vPosition.x;
+        float y = vPosition.y;
+        float z = vPosition.z;
+        float focalLength = 2.0;
+        vec3 color = vec3(0.0, 0.0, 0.0);
+
+        num_spheres = 4;
+        num_planes = 0;
+
+        // Create spheres
+        spheres[0].center = vec3(-0.5, -0.5, -0.4);
+        spheres[0].radius = 0.35;
+        spheres[0].color = vec3(1.0, 0.0, 0.0);
+        spheres[0].hasSpecular = true;
+        spheres[0].hasReflection = true;
+        spheres[0].isMirror = false;
+
+        // Create spheres
+        spheres[1].center = vec3(-0.5, 0.5, -0.4);
+        spheres[1].radius = 0.35;
+        spheres[1].color = vec3(1.0, 1.0, 0.0);
+        spheres[1].hasSpecular = true;
+        spheres[1].hasReflection = true;
+        spheres[1].isMirror = false;
+
+        // Create spheres
+        spheres[2].center = vec3(0.5, 0.5, -0.4);
+        spheres[2].radius = 0.35;
+        spheres[2].color = vec3(0.0, 1.0, 0.0);
+        spheres[2].hasSpecular = true;
+        spheres[2].hasReflection = true;
+        spheres[2].isMirror = false;
+
+        // Create spheres
+        spheres[3].center = vec3(0.5, -0.5, -0.4);
+        spheres[3].radius = 0.35;
+        spheres[3].color = vec3(0.0, 0.0, 1.0);
+        spheres[3].hasSpecular = true;
+        spheres[3].hasReflection = true;
+        spheres[3].isMirror = false;
+
+        // Create ray
+        rays[0].origin = vec3(0.0, 0.0, focalLength);
+        rays[0].direction = normalize(vec3(x, y, -focalLength));
+
+        // Create Light source
+        light[0].position = vec3(-0.0, 0.0, 1.5);
+        light[0].ambience = 0.1;
+    }
+
+    // 2 spheres, one mirror one green with no spectral or reflections, in a room with 6 walls of different colors.
+    // walls are planes with no reflect or spectral.
+    void initialize3() {
+        float x = vPosition.x;
+        float y = vPosition.y;
+        float z = vPosition.z;
+        float focalLength = 2.0;
+        vec3 color = vec3(0.0, 0.0, 0.0);
+
+        num_spheres = 2;
+        num_planes = 6;
+
+        // Create spheres
+        spheres[0].center = vec3(-0.5, -0.4, -1.0);
+        spheres[0].radius = 0.3;
+        spheres[0].color = vec3(1.0, 0.0, 0.0);
+        spheres[0].hasSpecular = true;
+        spheres[0].hasReflection = true;
+        spheres[0].isMirror = true;
+
+        // Create spheres
+        spheres[1].center = vec3(0.5, -0.4, -0.4);
+        spheres[1].radius = 0.3;
+        spheres[1].color = vec3(0.0, 1.0, 0.0);
+        spheres[1].hasSpecular = false;
+        spheres[1].hasReflection = false;
+        spheres[1].isMirror = false;
+
+        // Create ray
+        rays[0].origin = vec3(0.0, 0.0, focalLength);
+        rays[0].direction = normalize(vec3(x, y, -focalLength));
+
+        // Create Light source
+        light[0].position = vec3(-0.0, 1.0, -0.25);
+        light[0].ambience = 0.1;
+
+        // floor
+        planes[0].center = vec3(0.0, -0.7, 0.0);
+        planes[0].normal = vec3(0.0, 1.0, 0.0);
+        planes[0].color = vec3(0.0, 0.0, 1.0);
+        planes[0].hasReflection = false;
+        planes[0].isMirror = false;
+
+        // roof
+        planes[1].center = vec3(0.0, 1.0, 0.0);
+        planes[1].normal = vec3(0.0, -1.0, 0.0);
+        planes[1].color = vec3(1.0, 0.0, 1.0);
+        planes[1].hasReflection = false;
+        planes[1].isMirror = false;
+
+        // right wall
+        planes[2].center = vec3(1.0, 0.0, 0.0);
+        planes[2].normal = vec3(1.0, 0.0, 0.0);
+        planes[2].color = vec3(0.0, 1.0, 0.0);
+        planes[2].hasReflection = false;
+        planes[2].isMirror = false;
+
+        // left wall
+        planes[3].center = vec3(-1.0, 0.0, 0.0);
+        planes[3].normal = vec3(-1.0, 0.0, 0.0);
+        planes[3].color = vec3(0.0, 1.0, 1.0);
+        planes[3].hasReflection = false;
+        planes[3].isMirror = false;
+
+        // front wall
+        planes[4].center = vec3(0.0, 1.0, -3);
+        planes[4].normal = vec3(0.0, 0.0, 1.0);
+        planes[4].color = vec3(1.0, 1.0, 0.0);
+        planes[4].hasReflection = false;
+        planes[4].isMirror = false;
+
+        // back wall
+        planes[5].center = vec3(0.0, 1.0, 2);
+        planes[5].normal = vec3(0.0, 0.0, 1.0);
+        planes[5].color = vec3(1.0, 1.0, 1.0);
+        planes[5].hasReflection = false;
+        planes[5].isMirror = false;
+    }
+
+    // Checks for intersection with a sphere.
+    float checkIntersectSphere(Sphere sphere, Ray ray) {
+        vec3 sphereCenter = sphere.center;
+        float radius = sphere.radius;
+        vec3 cameraSource = ray.origin;
+        vec3 cameraDirection = ray.direction;
+
+        vec3 distanceFromCenter = (cameraSource - sphereCenter);
+        float B = 2.0 * dot(cameraDirection, distanceFromCenter);
+        float C = dot(distanceFromCenter, distanceFromCenter) - pow(radius, 2.0);
+        float delta = pow(B, 2.0) - 4.0 * C;
+        float t = 0.0;
+        if (delta > 0.0) {
+            float sqRoot = sqrt(delta);
+            float t1 = (-B + sqRoot) / 2.0;
+            float t2 = (-B - sqRoot) / 2.0;
+            t = min(t1, t2);
+        }
+        if (delta == 0.0) {
+            t = -B / 2.0;
+        }
+
+        return t;
+    }
+
+    // Checks for intersection with a plane based on the formula,
+    //      (o - e) * n
+    // t = ----------------
+    //        d * n
+    float checkIntersectPlane(Plane plane, Ray ray) {
+        vec3 planeCenter = plane.center;
+        vec3 planeNormal = plane.normal;
+        vec3 planeColor = plane.color;
+
+        float denominator = dot(ray.direction, planeNormal);
+        if(denominator == 0.0) {
+            return -1.0;
+        }
+        //return 0.0;
+        return (dot(planeNormal, planeCenter) - dot(planeNormal, ray.origin)) / denominator;
+    }
+
+    // Follow a ray along its path, check if it intersects a plane or a sphere, do reflection or mirroring as required,
+    // and check for shadows. Return the result.
+    RayTracerOutput getRay(Ray ray, Light light) {
+
+        RayTracerOutput rayTracer;
+        vec3 color = vec3(0.0, 0.0, 0.0);
+        //float t1 = checkIntersectSphere(spheres[0], ray);
+        //float t2 = checkIntersectSphere(spheres[1], ray);
+
+        float t = 0.0;
+        float minT = 1000000.0;
+        Sphere sphereToShow;
+        Plane planeToShow;
+        int objectOnTop = 0; // 0 if none, 1 if sphere, 2 if plane
+        // find all intersections between the ray anb a sphere
+        for(int i = 0; i < 999; i++) {
+            if(i == num_spheres) {
+                break;
+            }
+            t = checkIntersectSphere(spheres[i], ray);
+            if(t > 0.0 && t < minT) {
+                minT = t;
+                sphereToShow = spheres[i];
+                objectOnTop = 1;
+            }
+        }
+        // find all intersections between the ray anb a plane
+        for(int i = 0; i < 999; i++) {
+            if(i == num_planes) {
+                break;
+            }
+            t = checkIntersectPlane(planes[i], ray);
+            if(t > 0.0 && t < minT) {
+                minT = t;
+                planeToShow = planes[i];
+                objectOnTop = 2;
+            }
+        }
+
+        if(minT > 0.0 && minT < 1000000.0) {
+            // different calculations based on if its a plane or a sphere
+            vec3 center;
+            vec3 objectColor;
+            vec3 cameraSource = ray.origin;
+            vec3 cameraDirection = ray.direction;
+            vec3 lightSource = light.position;
+            float ambience = light.ambience;
+            bool doReflection;
+            bool doMirror;
+
+            vec3 surfacePoint = cameraSource + (minT * cameraDirection);
+            vec3 surfaceNormal;
+            if(objectOnTop == 1) {
+                // object is sphere
+                objectColor = sphereToShow.color;
+                center = sphereToShow.center;
+                surfaceNormal = normalize(surfacePoint - center);
+                vec3 lightToPoint = lightSource - surfacePoint;
+                color = objectColor * (ambience + ((1.0 - ambience) * max(0.0, dot(surfaceNormal, lightToPoint))));
+                // also compute specular highlight
+                rayTracer.color = color;
+                if(sphereToShow.hasSpecular) {
+                    vec3 V = normalize(surfacePoint - ray.origin);
+                    vec3 R = reflect(normalize(lightToPoint), surfaceNormal);
+                    vec3 specular = pow(max(dot(V, R), 0.0), 50.0) * vec3(1.0, 1.0, 1.0);
+                    rayTracer.color = color + specular;
+                }
+                doReflection = sphereToShow.hasReflection;
+                doMirror = sphereToShow.isMirror;
+            } else if(objectOnTop == 2) {
+                // object is plane
+                center = planeToShow.center;
+                surfaceNormal = -planeToShow.normal;
+
+                objectColor = planeToShow.color;
+
+                doReflection = planeToShow.hasReflection;
+                doMirror = planeToShow.isMirror;
+
+                color = objectColor;
+                rayTracer.color = color;
+            }
+
+            Ray shadowChecker;
+            shadowChecker.origin = surfacePoint + 0.0001 * surfaceNormal;
+            shadowChecker.direction = normalize(light.position - shadowChecker.origin);
+            bool hitsObstacle = false;
+            float at = 0.0;
+            float aminT = 1000000.0;
+            for(int i = 0; i < 999; i++) {
+                if(i == num_spheres) {
+                    break;
+                }
+                // planes don't have to cast shadows for this
+                at = checkIntersectSphere(spheres[i], shadowChecker);
+                if(at > 0.0 && at < aminT) {
+                    hitsObstacle = true;
+                }
+            }
+            if(hitsObstacle) {
+                rayTracer.color = objectColor * ambience;
+            }
+
+
+            Ray reflectionRay;
+            vec3 reflection = reflect(ray.direction, surfaceNormal);
+            reflectionRay.origin = surfacePoint - 0.0001 * surfaceNormal;
+            reflectionRay.direction = reflection;
+            rayTracer.reflectedRay = reflectionRay;
+            if(doMirror) {
+                rayTracer.include = false;
+            } else {
+                rayTracer.include = true;
+            }
+            if(doReflection) {
+                rayTracer.futures = true;
+            } else {
+                rayTracer.futures = false;
+            }
+         }
+         else {
+            rayTracer.color = color;
+         }
+        return rayTracer;
+     }
+
+    // Main function: initializes objects to trace rays to, lights, ray. Traces the ray and any reflections as required,
+    // then combines all retrieved colors based on what was a mirror or not.
+    void main() {
+        if(sceneNum == 1) {
+            initialize1();
+        } else if (sceneNum == 2) {
+            initialize2();
+        } else if (sceneNum == 3) {
+            initialize3();
+        }
+
+
+        RayTracerOutput mainRay = getRay(rays[0], light[0]);
+        vec4 color = vec4(0.0, 0.0, 0.0, 1.0);
+        if(mainRay.include) {
+            color = vec4(mainRay.color, 1.0);
+        }
+        if(mainRay.futures) {
+            RayTracerOutput reflectionRay = getRay(mainRay.reflectedRay, light[0]);
+            if(reflectionRay.include) {
+                if(mainRay.include) {
+                    color = vec4((mainRay.color * 0.7) + (reflectionRay.color * 0.3), 1.0);
+                } else {
+                    color = vec4(reflectionRay.color, 1.0);
+                }
+            }
+            if(reflectionRay.futures) {
+                RayTracerOutput reflectionRayTwo = getRay(reflectionRay.reflectedRay, light[0]);
+                if(reflectionRayTwo.include) {
+                    if(reflectionRay.include) {
+                        if(mainRay.include) {
+                            color = vec4((mainRay.color * 0.60) + (reflectionRay.color * 0.25) + (reflectionRayTwo.color * 0.15), 1.0);
+                        } else {
+                            color = vec4((reflectionRay.color * 0.7) + (reflectionRayTwo.color * 0.15), 1.0);
+                        }
+                    } else {
+                        if(mainRay.include) {
+                            color = vec4((reflectionRayTwo.color * 0.3) + (mainRay.color * 0.7), 1.0);
+                        } else {
+                            color = vec4(reflectionRayTwo.color, 0.25);
+                        }
+                    }
+                } else {
+                    if(reflectionRay.include) {
+                        if(mainRay.include) {
+                            color = vec4((mainRay.color * 0.7) + (reflectionRay.color * 0.3), 1.0);
+                        } else {
+                            color = vec4(reflectionRay.color, 1.0);
+                        }
+                    } else if(mainRay.include) {
+                        color = vec4(mainRay.color, 1.0);
+                    }
+                }
+            }
+        }
+        gl_FragColor = color;
+   }
+</script>
+
+    <script src="lib/webgl-utils.js"></script>
+    <script src="lib/initShaders.js"></script>
+    <script src="lib/MV.js"></script>
+    <script src="setup.js"></script>
+
+</head>
+
+<body onload="main()">
+
+<canvas id="webgl" width="800" height="800">
+    Please use a browser that supports webgl and the "canvas" tag.
+</canvas>
+<h2>Scene Selection:</h2>
+<button id="scene1">Scene 1</button>
+<button id="scene2">Scene 2</button>
+<button id="scene3">Scene 3</button>
+</body>
+</html>
